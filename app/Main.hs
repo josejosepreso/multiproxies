@@ -3,40 +3,52 @@ import Text.Regex.Posix
 import Text.HTML.TagSoup
 import Data.Foldable (fold)
 
+and' :: Tag String -> [(Tag String -> Bool)] -> Bool
+and' _ [] = True
+and' tag (f:fs) = if f tag then and' tag fs else False
+
+tagTextMatcher :: String -> Tag String -> Bool
+tagTextMatcher regex tag = fromTagText tag =~ regex :: Bool
+
 type Proxy = (String, String)
 
 parseTbl :: [Tag String] -> [Proxy]
 parseTbl [] = []
 parseTbl (x:xs)
   | ip x = [( fromTagText x
-            , fromTagText . head . dropWhile (not . port) $ xs
+            , fromTagText
+              . head
+              . dropWhile (not . port)
+              $ xs
             )] ++ parseTbl xs
   | otherwise = parseTbl xs
   where ip, port :: Tag String -> Bool
-        ip tag = and [ isTagText tag
-                     , fromTagText tag =~ "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$" :: Bool
-                     ]
-        port tag = and [ isTagText tag
-                       , fromTagText tag =~ "^[0-9]+$" :: Bool
-                       ]
+        ip tag = and' tag [ isTagText, tagTextMatcher ipPattern ]
+        port tag = and' tag [ isTagText, tagTextMatcher portPattern ]
 
 sources :: [IO String]
-sources = [ curlGetString "https://spys.me/proxy.txt" [CurlNoProgress True]
-            >>= pure
-            . unlines
-            . map matchPair
-            . init . init . drop 6
-            . lines
-            . snd
-          ,
-            curlGetString "https://free-proxy-list.net/" [CurlNoProgress True]
-            >>= pure
-            . unlines
-            . toPair
-            . parseTbl
-            . parseTags
-            . tbody
-            . snd
+sources = [ curlGetString url [CurlNoProgress True] >>= pure . f
+          | (url, f) <- [("https://spys.me/proxy.txt"
+                           , unlines
+                           . map matchPair
+                           . init . init . drop 6
+                           . lines
+                           . snd
+                         )
+                        ,
+                         ("https://free-proxy-list.net/"
+                           , unlines
+                           . toPair
+                           . parseTbl
+                           . parseTags
+                           . tbody
+                           . snd
+                         )
+                        ,
+                         ("https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&proxy_format=ipport&format=text"
+                          , snd
+                         )
+                        ]
           ]
   where tbody :: String -> String
         tbody x = x =~ "<tbody>.*</tbody>" :: String
@@ -46,3 +58,6 @@ sources = [ curlGetString "https://spys.me/proxy.txt" [CurlNoProgress True]
         toPair ((ip, port):xs) = [ip ++ ":" ++ port] ++ toPair xs
 
 main = fold sources >>= writeFile "proxies.txt"
+
+ipPattern = "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$"
+portPattern = "^[0-9]+$"
